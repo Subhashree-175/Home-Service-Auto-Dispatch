@@ -1,0 +1,14 @@
+# Frontend production build
+frontend/dist/
+
+# Dependencies
+frontend/node_modules/
+backend/node_modules/
+
+# Environment variables
+backend/.env
+frontend/.env
+frontend/.env.local
+
+# Logs
+npm-debug.log*
