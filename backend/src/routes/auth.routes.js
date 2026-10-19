@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { asyncHandler, AppError } = require('../utils/helpers');
 const { authenticate } = require('../middleware/auth');
-
+const { sendPasswordResetEmail } = require('../utils/mailer');
 const router = express.Router();
 
 const signToken = (userId) =>
@@ -119,48 +119,79 @@ router.post(
   })
 );
 
+
 /**
  * POST /api/auth/forgot-password
- * Accept an email, generate a password-reset token (valid 15 min),
- * store it in system_logs, and return success (in production this would email the link).
+ * Generate a reset token and email the reset link.
  */
 router.post(
   '/forgot-password',
   asyncHandler(async (req, res) => {
     const { email } = req.body || {};
-    if (!email) throw new AppError(400, 'email is required');
+
+    if (!email) {
+      throw new AppError(400, 'email is required');
+    }
 
     const { rows } = await pool.query(
-      `SELECT id, name FROM users WHERE LOWER(email) = LOWER($1) AND is_active = TRUE`,
+      `SELECT id, name, email
+       FROM users
+       WHERE LOWER(email) = LOWER($1)
+       AND is_active = TRUE`,
       [email]
     );
+
+    // Do not reveal whether an account exists.
     if (!rows.length) {
-      // Don't reveal whether email exists — always return success
-      return res.json({ message: 'If an account exists for this email, a reset link has been sent.' });
+      return res.json({
+        message:
+          'If an account exists for this email, a reset link has been sent.',
+      });
     }
 
     const user = rows[0];
+
     const resetToken = jwt.sign(
       { sub: user.id, type: 'reset' },
-      process.env.JWT_SECRET || 'dev_secret',
+      process.env.JWT_SECRET,
       { expiresIn: '15m' }
     );
-    const resetExpires = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+    const frontendUrl = (
+      process.env.CLIENT_URL ||
+      'https://home-service-auto-dispatch-black.vercel.app'
+    ).replace(/\/+$/, '');
+
+    const resetLink =
+      `${frontendUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
+
+    // Send the actual password-reset email.
+    await sendPasswordResetEmail(user.email, resetLink);
+
+    // Log the request without storing the sensitive reset token.
+    const resetExpires = new Date(
+      Date.now() + 15 * 60 * 1000
+    ).toISOString();
 
     await pool.query(
-      `INSERT INTO system_logs (log_type, message, meta) VALUES ($1, $2, $3)`,
-      ['password_reset', `Password reset requested for user ${user.name} (${user.id})`,
-       JSON.stringify({ email, resetToken, expiresAt: resetExpires })]
+      `INSERT INTO system_logs (log_type, message, meta)
+       VALUES ($1, $2, $3)`,
+      [
+        'password_reset',
+        `Password reset requested for user ${user.name} (${user.id})`,
+        JSON.stringify({
+          email: user.email,
+          expiresAt: resetExpires,
+        }),
+      ]
     );
 
-    res.json({
-      message: 'If an account exists for this email, a reset link has been sent.',
-      // In development, expose the reset token so it can be tested directly:
-      ...(process.env.NODE_ENV === 'development' ? { resetToken } : {}),
+    return res.json({
+      message:
+        'If an account exists for this email, a reset link has been sent.',
     });
   })
 );
-
 /**
  * POST /api/auth/reset-password
  * Reset password using a valid reset token (from forgot-password).
