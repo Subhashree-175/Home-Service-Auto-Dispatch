@@ -14,10 +14,12 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME || 'emergency_dispatch',
 
-  // Neon requires SSL; keep certificate verification enabled.
-  ...(isProduction
-    ? { ssl: { rejectUnauthorized: true } }
-    : {}),
+  // Require SSL when connecting to the production database.
+  ...(isProduction && {
+    ssl: {
+      rejectUnauthorized: true,
+    },
+  }),
 
   max: 20,
   idleTimeoutMillis: 30000,
